@@ -1,0 +1,76 @@
+# ปลุกแอป Streamlit ไม่ให้หลับ — ใช้ใน repo สาธารณะ (public) ที่มีแค่ไฟล์นี้ไฟล์เดียว
+# repo สาธารณะ: GitHub Actions ไม่คิดนาที ไม่กินโควตาของ repo ส่วนตัว (YouTube Automation / ERP)
+# ไฟล์นี้ไม่มีรหัสผ่าน/โทเคน • เปิดแค่หน้าแรก (หน้าล็อกอิน) ไม่ได้เข้าข้อมูลในระบบ
+name: keep-awake
+
+on:
+  schedule:
+    - cron: "17 */4 * * *"     # ทุก 4 ชม. (Streamlit หลับเมื่อไม่มีคนเข้า 12 ชม.)
+  workflow_dispatch: {}        # กดรันเองได้ที่แท็บ Actions
+
+permissions:
+  contents: write              # ใช้แค่ขั้น "กันหยุดอัตโนมัติ" ด้านล่าง
+
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        url:
+          - https://po-price-checker.streamlit.app/
+          - https://payroll-sci.streamlit.app/
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install browser
+        run: |
+          pip install playwright==1.48.0
+          python -m playwright install --with-deps chromium
+      - name: Open app (click wake button if asleep)
+        env:
+          APP_URL: ${{ matrix.url }}
+        run: |
+          python - <<'PY'
+          import os, sys
+          from playwright.sync_api import sync_playwright
+          url = os.environ["APP_URL"]
+          with sync_playwright() as p:
+              b = p.chromium.launch()
+              pg = b.new_page()
+              pg.goto(url, wait_until="domcontentloaded", timeout=90000)
+              pg.wait_for_timeout(8000)
+              btn = pg.get_by_role("button", name="Yes, get this app back up!")
+              if btn.count():
+                  print("app was asleep -> waking")
+                  btn.first.click()
+                  pg.wait_for_timeout(60000)
+              else:
+                  print("app awake")
+              pg.wait_for_timeout(5000)
+              b.close()
+          PY
+
+  # GitHub หยุด schedule เองถ้า repo ไม่มีความเคลื่อนไหว 60 วัน ➜ commit ไฟล์เล็กๆ ทุก ~50 วัน
+  heartbeat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Commit heartbeat if repo idle > 50 days
+        run: |
+          last=$(git log -1 --format=%ct)
+          now=$(date +%s)
+          if [ $(( (now - last) / 86400 )) -ge 50 ]; then
+            date -u +%FT%TZ > heartbeat.txt
+            git config user.name  "keep-awake-bot"
+            git config user.email "keep-awake-bot@users.noreply.github.com"
+            git add heartbeat.txt
+            git commit -m "heartbeat"
+            git push
+          else
+            echo "recent activity, skip"
+          fi
